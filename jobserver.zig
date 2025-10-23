@@ -2,7 +2,7 @@ pub const Server = switch (builtin.os.tag) {
     else => struct {
         sem_id: c_int,
 
-        pub fn init(num_tokens: usize, env_map: *std.process.EnvMap) !@This() {
+        pub fn init(num_tokens: usize, env_map: *std.process.EnvMap) !Server {
             const sem_id = createSemaphore();
             setSemaphore(sem_id, @intCast(num_tokens));
             var buf: [std.fmt.count("{d}", .{std.math.maxInt(c_int)})]u8 = undefined;
@@ -13,9 +13,11 @@ pub const Server = switch (builtin.os.tag) {
             return .{ .sem_id = sem_id };
         }
 
-        pub fn deinit(server: *@This()) void {
+        pub fn deinit(server: *Server) void {
             server.* = undefined;
         }
+
+        pub fn run(_: *Server) void {}
 
         /// `semget(IPC_PRIVATE, 1, 0o777)`
         fn createSemaphore() c_int {
@@ -44,7 +46,7 @@ pub const Server = switch (builtin.os.tag) {
 
         var pipe_name_counter = std.atomic.Value(u32).init(1);
 
-        pub fn init(num_tokens: usize, env_map: *std.process.EnvMap) !@This() {
+        pub fn init(num_tokens: usize, env_map: *std.process.EnvMap) !Server {
             var tmp_buf: [128]u8 = undefined;
             // Forge a random path for the pipe.
             const pipe_path = std.fmt.bufPrintSentinel(
@@ -73,15 +75,14 @@ pub const Server = switch (builtin.os.tag) {
             return server;
         }
 
-        pub fn deinit(server: *@This()) void {
-            windows.CloseHandle(server.named_pipe_handle);
+        pub fn deinit(server: *Server) void {
             server.* = undefined;
         }
 
-        pub fn run(server: *@This()) void {
+        pub fn run(server: *Server) !void {
             while (true) {
                 const named_pipe_handle = windows.kernel32.CreateNamedPipeW(
-                    &server.path_buf,
+                    @ptrCast(&server.path_buf),
                     windows.PIPE_ACCESS_INBOUND,
                     windows.PIPE_TYPE_BYTE,
                     @intCast(server.num_tokens),
@@ -97,7 +98,7 @@ pub const Server = switch (builtin.os.tag) {
                 }
                 defer windows.CloseHandle(named_pipe_handle);
 
-                if (ConnectNamedPipe(server.named_pipe_handle, null) == 0) {
+                if (ConnectNamedPipe(named_pipe_handle, null) == 0) {
                     std.debug.panic("{t}", .{windows.GetLastError()});
                 }
             }
@@ -112,12 +113,12 @@ pub const Client = switch (builtin.os.tag) {
         pub const Permit = struct {
             sem_id: c_int,
 
-            pub fn release(permit: @This()) void {
+            pub fn release(permit: Permit) void {
                 modifySemaphore(permit.sem_id, 1);
             }
         };
 
-        pub fn init() !@This() {
+        pub fn init() !Client {
             return .{
                 .sem_id = try std.fmt.parseInt(
                     c_int,
@@ -127,11 +128,11 @@ pub const Client = switch (builtin.os.tag) {
             };
         }
 
-        pub fn deinit(client: *@This()) void {
+        pub fn deinit(client: *Client) void {
             client.* = undefined;
         }
 
-        pub fn acquire(client: @This()) !Permit {
+        pub fn acquire(client: Client) !Permit {
             modifySemaphore(client.sem_id, -1);
             return .{ .sem_id = client.sem_id };
         }
@@ -161,12 +162,12 @@ pub const Client = switch (builtin.os.tag) {
         pub const Permit = struct {
             named_pipe_handle: windows.HANDLE,
 
-            pub fn release(permit: @This()) void {
+            pub fn release(permit: Permit) void {
                 windows.CloseHandle(permit.named_pipe_handle);
             }
         };
 
-        pub fn init() !@This() {
+        pub fn init() !Client {
             return .{};
         }
 
@@ -183,6 +184,7 @@ pub const Client = switch (builtin.os.tag) {
             nt_path[0..4].* = .{ '\\', '?', '?', '\\' };
             @memcpy(nt_path[4..], path[4..]);
             const handle = while (true) {
+                std.debug.dumpHex(@ptrCast(nt_path));
                 break windows.OpenFile(
                     nt_path,
                     .{
