@@ -17,7 +17,9 @@ pub const Server = switch (builtin.os.tag) {
             server.* = undefined;
         }
 
-        pub fn run(_: *Server) void {}
+        pub fn spawn(_: *Server) !std.Thread {
+            return undefined;
+        }
 
         /// `semget(IPC_PRIVATE, 1, 0o777)`
         fn createSemaphore() c_int {
@@ -56,22 +58,18 @@ pub const Server = switch (builtin.os.tag) {
                 0,
             ) catch unreachable;
 
-            var tmp_bufw: [128]u16 = undefined;
+            try env_map.put("JOBSERVER_NAMEDPIPE", pipe_path);
 
             // Anonymous pipes are built upon Named pipes.
             // https://docs.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-createpipe
             // Asynchronous (overlapped) read and write operations are not supported by anonymous pipes.
             // https://docs.microsoft.com/en-us/windows/win32/ipc/anonymous-pipe-operations
-            const len = std.unicode.wtf8ToWtf16Le(&tmp_bufw, pipe_path) catch unreachable;
-            tmp_bufw[len] = 0;
-            try env_map.put("JOBSERVER_NAMEDPIPE", pipe_path);
             var server: Server = .{
                 .path_buf = undefined,
                 .num_tokens = num_tokens,
             };
-            for (server.path_buf[0 .. len + 1], tmp_buf[0 .. len + 1]) |*dst, src| {
-                dst.* = src;
-            }
+            const len = std.unicode.wtf8ToWtf16Le(&server.path_buf, pipe_path) catch unreachable;
+            server.path_buf[len] = 0;
             return server;
         }
 
@@ -79,29 +77,60 @@ pub const Server = switch (builtin.os.tag) {
             server.* = undefined;
         }
 
-        pub fn run(server: *Server) !void {
-            while (true) {
-                const named_pipe_handle = windows.kernel32.CreateNamedPipeW(
-                    @ptrCast(&server.path_buf),
-                    windows.PIPE_ACCESS_INBOUND,
-                    windows.PIPE_TYPE_BYTE,
-                    @intCast(server.num_tokens),
-                    0,
-                    0,
-                    0,
-                    null,
-                );
-                if (named_pipe_handle == windows.INVALID_HANDLE_VALUE) {
-                    switch (windows.GetLastError()) {
-                        else => |err| return windows.unexpectedError(err),
-                    }
-                }
-                defer windows.CloseHandle(named_pipe_handle);
-
-                if (ConnectNamedPipe(named_pipe_handle, null) == 0) {
-                    std.debug.panic("{t}", .{windows.GetLastError()});
+        pub fn spawn(server: *Server) !std.Thread {
+            const token = windows.kernel32.CreateNamedPipeW(
+                @ptrCast(&server.path_buf),
+                windows.PIPE_ACCESS_INBOUND,
+                windows.PIPE_TYPE_BYTE,
+                @intCast(server.num_tokens),
+                0,
+                0,
+                0,
+                null,
+            );
+            if (token == windows.INVALID_HANDLE_VALUE) {
+                switch (windows.GetLastError()) {
+                    else => |err| return windows.unexpectedError(err),
                 }
             }
+            return .spawn(.{}, run, .{ server, token });
+        }
+
+        fn run(_: *Server, token: windows.HANDLE) !void {
+            defer windows.CloseHandle(token);
+            while (true) {
+                _ = ConnectNamedPipe(token, null);
+                var buf: [1]u8 = undefined;
+                _ = try windows.ReadFile(token, &buf, null);
+                _ = DisconnectNamedPipe(token);
+            }
+
+            // for (0..server.num_tokens) |_| {
+            //     const named_pipe_handle = windows.kernel32.CreateNamedPipeW(
+            //         @ptrCast(&server.path_buf),
+            //         windows.PIPE_ACCESS_INBOUND,
+            //         windows.PIPE_TYPE_BYTE,
+            //         @intCast(server.num_tokens),
+            //         0,
+            //         0,
+            //         0,
+            //         null,
+            //     );
+            //     if (named_pipe_handle == windows.INVALID_HANDLE_VALUE) {
+            //         switch (windows.GetLastError()) {
+            //             else => |err| return windows.unexpectedError(err),
+            //         }
+            //     }
+            //     if (true) continue;
+            //     defer windows.CloseHandle(named_pipe_handle);
+
+            //     std.debug.print("server opened handle: {?*}\n", .{named_pipe_handle});
+            //     if (ConnectNamedPipe(named_pipe_handle, null) == 0) {
+            //         std.debug.panic("{t}", .{windows.GetLastError()});
+            //     }
+
+            //     _ = DisconnectNamedPipe(named_pipe_handle);
+            // }
         }
     },
 };
@@ -184,7 +213,6 @@ pub const Client = switch (builtin.os.tag) {
             nt_path[0..4].* = .{ '\\', '?', '?', '\\' };
             @memcpy(nt_path[4..], path[4..]);
             const handle = while (true) {
-                std.debug.dumpHex(@ptrCast(nt_path));
                 break windows.OpenFile(
                     nt_path,
                     .{
@@ -222,4 +250,8 @@ const NMPWAIT_WAIT_FOREVER: u32 = 0xffffffff;
 pub extern "kernel32" fn ConnectNamedPipe(
     windows.HANDLE,
     ?*windows.OVERLAPPED,
+) callconv(.winapi) windows.BOOL;
+
+pub extern "kernel32" fn DisconnectNamedPipe(
+    windows.HANDLE,
 ) callconv(.winapi) windows.BOOL;

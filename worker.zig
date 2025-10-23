@@ -32,8 +32,6 @@ pub fn main() !void {
 }
 
 fn workerThread(client: *Client, proc_num: usize, thread_num: usize, work_ms: u32) !void {
-    std.log.info("acquire {d}:{d}", .{ proc_num, thread_num });
-
     const permit = try client.acquire();
     defer permit.release();
 

@@ -9,10 +9,11 @@ pub fn main() !void {
     var server: Server = try .init(num_tokens, &env);
     defer server.deinit();
 
-    const t0 = try std.Thread.spawn(.{}, Server.run, .{&server});
-    defer t0.join();
+    const threads = try arena.alloc(std.Thread, num_tokens);
+    defer arena.free(threads);
+    for (threads) |*thread| thread.* = try server.spawn();
 
-    var children: [1]std.process.Child = undefined;
+    var children: [8]std.process.Child = undefined;
     for (&children, 0..) |*c, child_num| {
         const child_num_str = try std.fmt.allocPrint(arena, "{d}", .{child_num});
         const argv = try arena.dupe([]const u8, &.{ switch (builtin.os.tag) {
