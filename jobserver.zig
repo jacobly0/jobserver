@@ -104,33 +104,6 @@ pub const Server = switch (builtin.os.tag) {
                 _ = try windows.ReadFile(token, &buf, null);
                 _ = DisconnectNamedPipe(token);
             }
-
-            // for (0..server.num_tokens) |_| {
-            //     const named_pipe_handle = windows.kernel32.CreateNamedPipeW(
-            //         @ptrCast(&server.path_buf),
-            //         windows.PIPE_ACCESS_INBOUND,
-            //         windows.PIPE_TYPE_BYTE,
-            //         @intCast(server.num_tokens),
-            //         0,
-            //         0,
-            //         0,
-            //         null,
-            //     );
-            //     if (named_pipe_handle == windows.INVALID_HANDLE_VALUE) {
-            //         switch (windows.GetLastError()) {
-            //             else => |err| return windows.unexpectedError(err),
-            //         }
-            //     }
-            //     if (true) continue;
-            //     defer windows.CloseHandle(named_pipe_handle);
-
-            //     std.debug.print("server opened handle: {?*}\n", .{named_pipe_handle});
-            //     if (ConnectNamedPipe(named_pipe_handle, null) == 0) {
-            //         std.debug.panic("{t}", .{windows.GetLastError()});
-            //     }
-
-            //     _ = DisconnectNamedPipe(named_pipe_handle);
-            // }
         }
     },
 };
